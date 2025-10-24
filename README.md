@@ -39,12 +39,21 @@ Two powerful removal modes:
 
 ## 🚀 Quick Start
 
-### Prerequisites
+### 📦 Option 1: Download Executable (Windows - Easiest!)
 
+**No installation required!**
+
+1. Go to the [Latest Release](https://github.com/Profhameed/pdf-object-remover/releases/latest)
+2. Download `PDF-Object-Remover.exe`
+3. Double-click to run - that's it!
+
+### 🐍 Option 2: Run from Source (All Platforms)
+
+**Prerequisites:**
 - Python 3.7 or higher
 - pip (Python package manager)
 
-### Installation
+**Installation:**
 
 1. **Clone this repository**
    ```bash
