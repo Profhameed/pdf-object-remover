@@ -1,41 +1,15 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox, Listbox, Scrollbar, Canvas, Frame, Label, Entry, Scale
+from tkinter import filedialog, messagebox, Listbox, Scrollbar, Canvas, Frame, Label, Entry, Scale, Checkbutton, BooleanVar
 from PIL import Image, ImageTk
 import fitz  # PyMuPDF
 import os
 import math
 
-class TextRemoveDialog(tk.Toplevel):
-    """Custom dialog to choose the text removal method."""
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.title("Choose Text Removal Method")
-        self.geometry("400x150")
-        self.transient(parent)
-        self.grab_set()
-        self.result = None
-
-        Label(self, text="How should this text be removed?", pady=10).pack()
-
-        btn_frame = Frame(self)
-        btn_frame.pack(pady=10, fill="x", expand=True)
-
-        by_location_btn = tk.Button(btn_frame, text="By Location & Content (All Pages)", command=lambda: self.set_choice("location"))
-        by_location_btn.pack(pady=5, padx=20, fill="x")
-
-        by_content_btn = tk.Button(btn_frame, text="By Content Only (Entire PDF)", command=lambda: self.set_choice("content"))
-        by_content_btn.pack(pady=5, padx=20, fill="x")
-        
-        self.wait_window(self)
-
-    def set_choice(self, choice):
-        self.result = choice
-        self.destroy()
 
 class PDFImageRemover(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("PDF Object Remover v2.3")
+        self.title("PDF Object Remover v2.4")
         self.geometry("1200x900")
 
         # --- State Variables ---
@@ -46,8 +20,15 @@ class PDFImageRemover(tk.Tk):
         self.page_objects = []
         self.highlight_rect_id = None
         self.zoom_factor = 1.0
+        self.manual_zoom = False
+        self.user_zoom_level = 1.0
         self.resize_timer = None
         self.page_var = tk.IntVar(value=1)
+        self.remove_all_pages = BooleanVar(value=True)
+        self.text_remove_by_location = BooleanVar(value=True)
+        self.drag_start_x = 0
+        self.drag_start_y = 0
+        self.is_dragging = False
 
         # --- GUI Layout ---
         top_frame = Frame(self, bd=2, relief=tk.RAISED)
@@ -59,6 +40,16 @@ class PDFImageRemover(tk.Tk):
         self.remove_button.pack(side=tk.LEFT, padx=5, pady=5)
         self.save_button = tk.Button(top_frame, text="Save As...", command=self.save_as, state=tk.DISABLED)
         self.save_button.pack(side=tk.LEFT, padx=5, pady=5)
+        
+        # Zoom controls
+        Label(top_frame, text="Zoom:").pack(side=tk.LEFT, padx=(15, 5))
+        self.zoom_slider = Scale(top_frame, from_=10, to=500, orient=tk.HORIZONTAL, command=self.on_zoom_slider_change, showvalue=0, state=tk.DISABLED, length=150)
+        self.zoom_slider.set(100)
+        self.zoom_slider.pack(side=tk.LEFT, padx=5)
+        self.zoom_label = Label(top_frame, text="100%")
+        self.zoom_label.pack(side=tk.LEFT, padx=5)
+        self.reset_zoom_button = tk.Button(top_frame, text="Reset", command=self.reset_zoom, state=tk.DISABLED)
+        self.reset_zoom_button.pack(side=tk.LEFT, padx=5)
 
         main_pane = tk.PanedWindow(self, orient=tk.HORIZONTAL, sashrelief=tk.RAISED, sashwidth=8)
         main_pane.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -75,6 +66,10 @@ class PDFImageRemover(tk.Tk):
         h_scroll.pack(side=tk.BOTTOM, fill=tk.X)
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.canvas.bind('<Configure>', self.on_resize)
+        self.canvas.bind('<MouseWheel>', self.on_mouse_wheel)
+        self.canvas.bind('<ButtonPress-1>', self.on_canvas_press)
+        self.canvas.bind('<B1-Motion>', self.on_canvas_drag)
+        self.canvas.bind('<ButtonRelease-1>', self.on_canvas_release)
 
         # --- Navigation Controls ---
         nav_container = Frame(pdf_frame, bd=1, relief=tk.RAISED)
@@ -100,7 +95,15 @@ class PDFImageRemover(tk.Tk):
         main_pane.add(pdf_frame, width=800)
 
         right_frame = Frame(main_pane)
-        Label(right_frame, text="Objects on Current Page:").pack(anchor="w")
+        
+        # Removal options
+        options_frame = Frame(right_frame, bd=2, relief=tk.GROOVE)
+        options_frame.pack(fill=tk.X, padx=5, pady=5)
+        Label(options_frame, text="Removal Options:", font=("Arial", 10, "bold")).pack(anchor="w", padx=5, pady=5)
+        Checkbutton(options_frame, text="Remove from all pages", variable=self.remove_all_pages).pack(anchor="w", padx=20)
+        Checkbutton(options_frame, text="Text removal by location (unchecked = by content only)", variable=self.text_remove_by_location).pack(anchor="w", padx=20)
+        
+        Label(right_frame, text="Objects on Current Page:").pack(anchor="w", pady=(10, 0))
         list_container = Frame(right_frame)
         list_container.pack(fill=tk.BOTH, expand=True)
         self.objects_listbox = Listbox(list_container)
@@ -127,6 +130,8 @@ class PDFImageRemover(tk.Tk):
             self.current_page_num = 0
             self.page_slider.config(to=self.doc.page_count, state=tk.NORMAL)
             self.go_to_button.config(state=tk.NORMAL)
+            self.zoom_slider.config(state=tk.NORMAL)
+            self.reset_zoom_button.config(state=tk.NORMAL)
             self.render_page()
             self.status_bar.config(text=f"Loaded: {os.path.basename(self.filepath)}")
             self.save_button.config(state=tk.NORMAL)
@@ -152,10 +157,25 @@ class PDFImageRemover(tk.Tk):
         if canvas_width <= 1 or canvas_height <= 1:
             self.after(100, self.render_page)
             return
-            
-        zoom_x = canvas_width / page_rect.width
-        zoom_y = canvas_height / page_rect.height
-        self.zoom_factor = min(zoom_x, zoom_y, 1.0)
+        
+        if self.manual_zoom:
+            self.zoom_factor = self.user_zoom_level
+        else:
+            zoom_x = canvas_width / page_rect.width
+            zoom_y = canvas_height / page_rect.height
+            self.zoom_factor = min(zoom_x, zoom_y, 1.0)
+            self.user_zoom_level = self.zoom_factor
+        
+        zoom_percent = int(self.zoom_factor * 100)
+        self.zoom_label.config(text=f"{zoom_percent}%")
+        if not self.manual_zoom:
+            self.zoom_slider.set(zoom_percent)
+        
+        # Update cursor based on zoom state
+        if self.manual_zoom:
+            self.canvas.config(cursor="hand2")
+        else:
+            self.canvas.config(cursor="")
         
         mat = fitz.Matrix(self.zoom_factor, self.zoom_factor)
         pix = page.get_pixmap(matrix=mat)
@@ -214,22 +234,30 @@ class PDFImageRemover(tk.Tk):
         if obj_type == 'image':
             self.remove_image_by_xref(obj)
         elif obj_type == 'text':
-            dialog = TextRemoveDialog(self)
-            choice = dialog.result
-            if choice == "location":
+            if self.text_remove_by_location.get():
                 self.remove_text_by_location(obj)
-            elif choice == "content":
+            else:
                 self.remove_text_by_content(obj)
         else:
             messagebox.showinfo("Not Supported", f"Removal of '{obj_type}' objects is not yet supported.")
     
     def remove_image_by_xref(self, obj):
         target_xref = obj.get('xref')
-        if not target_xref or not messagebox.askyesno("Confirm Image Deletion", f"Remove all instances of Image ID {target_xref} from all pages?"): return
+        if not target_xref: return
+        
+        remove_all = self.remove_all_pages.get()
+        scope = "all pages" if remove_all else "current page only"
+        if not messagebox.askyesno("Confirm Image Deletion", f"Remove Image ID {target_xref} from {scope}?"): return
+        
         try:
             images_deleted = 0
-            for page in self.doc:
-                if page.delete_image(target_xref): images_deleted += 1
+            if remove_all:
+                for page in self.doc:
+                    if page.delete_image(target_xref): images_deleted += 1
+            else:
+                page = self.doc.load_page(self.current_page_num)
+                if page.delete_image(target_xref): images_deleted = 1
+            
             self.status_bar.config(text=f"Deleted {images_deleted} image instance(s). Remember to 'Save As...'")
             messagebox.showinfo("Success", f"{images_deleted} instance(s) marked for deletion. Save the file.")
             self.render_page()
@@ -240,13 +268,18 @@ class PDFImageRemover(tk.Tk):
         target_bbox, target_content = obj.get('bbox'), obj.get('content', '').strip()
         if not target_bbox or not target_content: return
         snippet = (target_content[:30] + '...') if len(target_content) > 30 else target_content
-        msg = f"Permanently REMOVE text matching:\n\nContent: \"{snippet}\"\nLocation: Near this area\n\nFrom ALL pages?"
-        if not messagebox.askyesno("Confirm Global Text Removal by Location", msg): return
+        
+        remove_all = self.remove_all_pages.get()
+        scope = "ALL pages" if remove_all else "current page only"
+        msg = f"Permanently REMOVE text matching:\n\nContent: \"{snippet}\"\nLocation: Near this area\n\nFrom {scope}?"
+        if not messagebox.askyesno("Confirm Text Removal by Location", msg): return
         
         try:
             removed_count = 0
             tolerance = 2.0
-            for page in self.doc:
+            pages_to_process = self.doc if remove_all else [self.doc.load_page(self.current_page_num)]
+            
+            for page in pages_to_process:
                 blocks = page.get_text("blocks")
                 for block in blocks:
                     if block[6] == 0 and block[4].strip() == target_content:
@@ -254,10 +287,14 @@ class PDFImageRemover(tk.Tk):
                         if math.isclose(current_bbox.x0, target_bbox.x0, abs_tol=tolerance) and math.isclose(current_bbox.y0, target_bbox.y0, abs_tol=tolerance):
                             page.add_redact_annot(current_bbox)
                             removed_count += 1
+            
             if removed_count == 0:
-                messagebox.showinfo("No Matches", "No other matching text blocks were found.")
+                messagebox.showinfo("No Matches", "No matching text blocks were found.")
                 return
-            for page in self.doc: page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+            
+            for page in pages_to_process:
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+            
             self.status_bar.config(text=f"Removed {removed_count} text instance(s). Remember to 'Save As...'")
             messagebox.showinfo("Success", f"{removed_count} instance(s) removed. Save the file.")
             self.render_page()
@@ -268,20 +305,29 @@ class PDFImageRemover(tk.Tk):
         target_content = obj.get('content', '').strip()
         if not target_content: return
         snippet = (target_content[:40] + '...') if len(target_content) > 40 else target_content
-        msg = f"Permanently REMOVE all occurrences of the text \"{snippet}\" from the ENTIRE PDF, regardless of location?"
-        if not messagebox.askyesno("Confirm Global Text Removal by Content", msg): return
+        
+        remove_all = self.remove_all_pages.get()
+        scope = "the ENTIRE PDF" if remove_all else "current page only"
+        msg = f"Permanently REMOVE all occurrences of the text \"{snippet}\" from {scope}, regardless of location?"
+        if not messagebox.askyesno("Confirm Text Removal by Content", msg): return
 
         try:
             removed_count = 0
-            for page in self.doc:
+            pages_to_process = self.doc if remove_all else [self.doc.load_page(self.current_page_num)]
+            
+            for page in pages_to_process:
                 areas = page.search_for(target_content)
                 for area in areas:
                     page.add_redact_annot(area)
                     removed_count += 1
+            
             if removed_count == 0:
-                messagebox.showinfo("No Matches", "That text was not found anywhere else in the document.")
+                messagebox.showinfo("No Matches", "That text was not found.")
                 return
-            for page in self.doc: page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+            
+            for page in pages_to_process:
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+            
             self.status_bar.config(text=f"Removed {removed_count} text instance(s). Remember to 'Save As...'")
             messagebox.showinfo("Success", f"{removed_count} instance(s) of the text were removed. Save the file.")
             self.render_page()
@@ -334,7 +380,45 @@ class PDFImageRemover(tk.Tk):
 
     def on_resize(self, event):
         if self.resize_timer: self.after_cancel(self.resize_timer)
-        self.resize_timer = self.after(250, self.render_page)
+        if not self.manual_zoom:
+            self.resize_timer = self.after(250, self.render_page)
+    
+    def on_zoom_slider_change(self, value):
+        if not self.doc: return
+        self.manual_zoom = True
+        self.user_zoom_level = int(value) / 100.0
+        self.render_page()
+    
+    def on_mouse_wheel(self, event):
+        if not self.doc: return
+        if self.manual_zoom:
+            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        else:
+            if event.delta > 0:
+                self.prev_page()
+            else:
+                self.next_page()
+    
+    def on_canvas_press(self, event):
+        if not self.doc or not self.manual_zoom: return
+        self.is_dragging = True
+        self.canvas.scan_mark(event.x, event.y)
+        self.canvas.config(cursor="fleur")
+    
+    def on_canvas_drag(self, event):
+        if not self.is_dragging: return
+        self.canvas.scan_dragto(event.x, event.y, gain=1)
+    
+    def on_canvas_release(self, event):
+        if not self.is_dragging: return
+        self.is_dragging = False
+        if self.manual_zoom:
+            self.canvas.config(cursor="hand2")
+    
+    def reset_zoom(self):
+        if not self.doc: return
+        self.manual_zoom = False
+        self.render_page()
 
 if __name__ == "__main__":
     app = PDFImageRemover()

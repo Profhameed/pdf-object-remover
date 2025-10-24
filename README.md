@@ -22,12 +22,15 @@ A powerful, user-friendly desktop application for removing unwanted objects from
 Two powerful removal modes:
 - **By Location & Content**: Remove text that appears in the same position across multiple pages (perfect for headers, footers, and watermarks)
 - **By Content Only**: Remove all instances of specific text throughout the entire document
+- **Flexible Scope**: Choose to remove from current page only or all pages
 
-### 🔍 **Smart PDF Navigation**
+### 🔍 **Smart PDF Navigation & Viewing**
 - Page-by-page browsing with prev/next buttons
 - Jump to specific pages instantly
 - Slider for quick navigation
-- Responsive zoom that fits your screen
+- **Zoom Controls**: Adjustable zoom slider (10%-500%)
+- **Pan & Scroll**: Click and drag to pan when zoomed, mouse wheel to scroll
+- **Auto-fit Mode**: Reset zoom to fit page to window
 
 ### 💾 **Safe Editing**
 - Non-destructive editing (original file remains unchanged)
@@ -63,9 +66,11 @@ Two powerful removal modes:
 
 1. **Upload a PDF**: Click "Upload PDF" and select your file
 2. **Navigate**: Browse through pages using the navigation controls
-3. **Select Objects**: Click on any object in the list to highlight it on the page
-4. **Remove**: Click "Remove Selected Object" and follow the prompts
-5. **Save**: Use "Save As..." to export your modified PDF
+3. **Zoom**: Use the zoom slider to zoom in/out, click and drag to pan when zoomed
+4. **Configure Removal**: Set removal options (all pages vs current page, text removal mode)
+5. **Select Objects**: Click on any object in the list to highlight it on the page
+6. **Remove**: Click "Remove Selected Object" to remove based on your settings
+7. **Save**: Use "Save As..." to export your modified PDF
 
 ### Example Use Cases
 
@@ -86,7 +91,7 @@ Main Interface - Object List View
 
 ```
 [Screenshot Placeholder]
-Text Removal Dialog - Choose Method
+Removal Options Panel - Configure Settings
 ```
 
 ## 🛠️ Technical Details
