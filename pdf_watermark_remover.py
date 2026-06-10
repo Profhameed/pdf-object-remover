@@ -223,7 +223,7 @@ class PDFImageRemover(tk.Tk):
         if self.highlight_rect_id: self.canvas.delete(self.highlight_rect_id)
         scaled_bbox = (bbox.x0 * self.zoom_factor, bbox.y0 * self.zoom_factor, bbox.x1 * self.zoom_factor, bbox.y1 * self.zoom_factor)
         self.highlight_rect_id = self.canvas.create_rectangle(scaled_bbox, outline="red", width=3)
-        self.remove_button.config(state=tk.NORMAL if obj.get('type') in ['image', 'text'] else tk.DISABLED)
+        self.remove_button.config(state=tk.NORMAL if obj.get('type') in ['image', 'text', 'vector'] else tk.DISABLED)
 
     def remove_object(self):
         selection = self.objects_listbox.curselection()
@@ -238,6 +238,8 @@ class PDFImageRemover(tk.Tk):
                 self.remove_text_by_location(obj)
             else:
                 self.remove_text_by_content(obj)
+        elif obj_type == 'vector':
+            self.remove_vector(obj)
         else:
             messagebox.showinfo("Not Supported", f"Removal of '{obj_type}' objects is not yet supported.")
     
@@ -263,6 +265,57 @@ class PDFImageRemover(tk.Tk):
             self.render_page()
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred during image deletion: {e}")
+
+    def remove_vector(self, obj):
+        target_bbox = obj.get('bbox')
+        path = obj.get('path', {})
+        path_type = path.get('type', '?')
+        if not target_bbox: return
+
+        remove_all = self.remove_all_pages.get()
+        scope = "all pages" if remove_all else "current page only"
+        msg = f"Permanently REMOVE vector object (Type: {path_type}) from {scope}?\n\nThis will erase the area covered by the object."
+        if not messagebox.askyesno("Confirm Vector Removal", msg): return
+
+        try:
+            removed_count = 0
+            tolerance = 1.0
+            pages_to_process = self.doc if remove_all else [self.doc.load_page(self.current_page_num)]
+
+            for page in pages_to_process:
+                drawings = page.get_drawings()
+                matched = None
+                for drawing in drawings:
+                    dr = drawing['rect']
+                    if (math.isclose(dr.x0, target_bbox.x0, abs_tol=tolerance) and
+                            math.isclose(dr.y0, target_bbox.y0, abs_tol=tolerance) and
+                            math.isclose(dr.x1, target_bbox.x1, abs_tol=tolerance) and
+                            math.isclose(dr.y1, target_bbox.y1, abs_tol=tolerance)):
+                        matched = dr
+                        break
+
+                if matched is not None:
+                    # Expand rect slightly to ensure full coverage of stroked paths
+                    expanded = matched + (-1, -1, 1, 1)
+                    page.add_redact_annot(expanded)
+                    removed_count += 1
+
+            if removed_count == 0:
+                messagebox.showinfo("No Matches", "No matching vector object was found.")
+                return
+
+            for page in pages_to_process:
+                # graphics parameter is required to actually erase vector drawings
+                page.apply_redactions(
+                    images=fitz.PDF_REDACT_IMAGE_NONE,
+                    graphics=fitz.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED,
+                )
+
+            self.status_bar.config(text=f"Removed {removed_count} vector instance(s). Remember to 'Save As...'")
+            messagebox.showinfo("Success", f"{removed_count} vector instance(s) removed. Save the file.")
+            self.render_page()
+        except Exception as e:
+            messagebox.showerror("Error", f"An error occurred during vector removal: {e}")
 
     def remove_text_by_location(self, obj):
         target_bbox, target_content = obj.get('bbox'), obj.get('content', '').strip()
